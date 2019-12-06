@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from scipy.stats import pearsonr
 
 BASE_PATH = "MovieLens/100K/ml-100k/u"
@@ -13,22 +14,41 @@ def importData(dataIndex):
 
     return trainData, testData
 
-def pearsonCorrelation(userID1, userID2, data):
-    user1CommonRatings, user2CommonRatings = getCommonUsersRattings(userID1, userID2, data)
+def pearsonCorrelation(userId1, userId2, data):
+    user1CommonRatings, user2CommonRatings = getCommonUsersRattings(userId1, userId2, data)
 
     pc, _ = pearsonr(user2CommonRatings, user1CommonRatings)
 
     return pc
 
-def getCommonUsersRattings(userID1, userID2, data):
+def getCommonUsersRattings(userId1, userId2, data):
     # Filter according to user's id
-    user1 = data[ data["user id"] == userID1 ]
-    user2 = data[ data["user id"] == userID2 ]
+    user1 = data[ data["user id"] == userId1 ]
+    user2 = data[ data["user id"] == userId2 ]
 
     # Inner join users on items
     commonRatings = user1.merge(user2, on="item id", suffixes=(' u1', ' u2'))
 
     return commonRatings["rating u1"], commonRatings["rating u2"]
+
+def getRatings(userId, itemId, data):
+    ratingRowFilter = (data["user id"] == userId) & (data["item id"] == itemId)
+    ratingRow = data[ratingRowFilter]
+    return ratingRow["rating"].values
+
+def predictRating(userId, itemId, data, k=5):
+    userNeighbors = getUserNeighbors(userId, k, data)
+
+    prediction = 0
+    similaritySum = 0
+    for neighbor in userNeighbors:
+        neighborRatings, neighborSimilarity = getRatings(neighbor, itemId, data)
+        prediction += neighborRatings.sum()
+        similaritySum += abs(neighborSimilarity) * len(neighborRatings)
+
+    if similaritySum > 0:
+        return prediction / similaritySum
+    return np.NaN
 
 def main():
     print("Hello world!")
