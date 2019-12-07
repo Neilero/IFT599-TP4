@@ -6,13 +6,13 @@ BASE_PATH = "MovieLens/100K/ml-100k/u"
 HEADER = ["user id", "item id", "rating", "timestamp"]
 
 def importData(dataIndex):
-    trainDataPath = BASE_PATH + dataIndex + ".base"
-    testDataPath = BASE_PATH + dataIndex + ".test"
+    trainDataPath = "{}{}.base".format(BASE_PATH, dataIndex)
+    testDataPath = "{}{}.test".format(BASE_PATH, dataIndex)
 
-    trainData = pd.read_csv(trainDataPath, sep='\t', names=HEADER)
+    baseData = pd.read_csv(trainDataPath, sep='\t', names=HEADER)
     testData = pd.read_csv(testDataPath, sep='\t', names=HEADER)
 
-    return trainData, testData
+    return baseData, testData
 
 def pearsonCorrelation(userId1, userId2, data):
     user1CommonRatings, user2CommonRatings = getCommonUsersRattings(userId1, userId2, data)
@@ -50,8 +50,27 @@ def predictRating(userId, itemId, data, k=5):
         return prediction / similaritySum
     return np.NaN
 
+def RMSE(baseData, testData):
+    error = 0
+
+    # for each test row : error += (predict(u, i) - r)**2
+    for i, row in testData.iterrows():
+        rowError = (predictRating(row["user id"], row["item id"], baseData) - row["rating"])**2
+        # error += np.nan_to_num(rowError)
+        error += rowError
+
+    error = np.sqrt( error/len(testData) )
+
+    return error
+
 def main():
-    print("Hello world!")
+    for dataIndex in range(6):
+        print("--- Computing data {} error ---".format(dataIndex))
+
+        baseData, testData = importData(dataIndex)
+        error = RMSE(baseData, testData)
+
+        print("Validation error : {:.3f} %\n".format(error))
 
 if __name__ == '__main__':
     main()
