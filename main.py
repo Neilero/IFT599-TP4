@@ -1,3 +1,6 @@
+import time
+from concurrent.futures import ThreadPoolExecutor
+from itertools import product
 import pandas as pd
 import numpy as np
 from scipy.stats import pearsonr
@@ -14,17 +17,46 @@ def importData(dataIndex):
 
     return baseData, testData
 
-def pearsonCorrelation(userId1, userId2, data):
-    user1CommonRatings, user2CommonRatings = getCommonUsersRattings(userId1, userId2, data)
+def pearsonCorrelation(userId1, userId2):
+    global baseData
+    global correlationMatrix
 
-    pc, _ = pearsonr(user2CommonRatings, user1CommonRatings)
+    if correlationMatrix[userId1, userId2] == 0:
+        user1CommonRatings, user2CommonRatings = getCommonUsersRattings(userId1, userId2)
 
-    return pc
+        # If user 1 and 2 have less than 2 common ratings, the correlation coefficient is not defined
+        if len(user1CommonRatings) < 2:
+            return np.nan
+        # If the ratings are constant, the correlation coefficient is not defined
+        if (user1CommonRatings == user1CommonRatings[0]).all() or (user2CommonRatings == user2CommonRatings[0]).all():
+            return np.nan
 
-def getCommonUsersRattings(userId1, userId2, data):
+        pc, _ = pearsonr(user2CommonRatings, user1CommonRatings)
+
+        correlationMatrix[userId1, userId2] = pc
+
+    return correlationMatrix[userId1, userId2]
+
+def getPearsonCorrelationMatrix(data):
+    userList = np.unique(data["user id"])
+    correlationMatrix = np.zeros((userList.max()+1, userList.max()+1))
+
+    start = time.time()
+    with ThreadPoolExecutor() as executor:
+        for user1, user2, correlation in executor.map(lambda args : pearsonCorrelation(*args), product(userList, userList, [data])):
+            correlationMatrix[user1][user2] = correlation
+    finish = time.time()
+
+    print("Pearson correlation computing : {:.3f}".format(finish-start))
+
+    return correlationMatrix
+
+def getCommonUsersRattings(userId1, userId2):
+    global baseData
+
     # Filter according to user's id
-    user1 = data[ data["user id"] == userId1 ]
-    user2 = data[ data["user id"] == userId2 ]
+    user1 = baseData[ baseData["user id"] == userId1 ]
+    user2 = baseData[ baseData["user id"] == userId2 ]
 
     # Inner join users on items
     commonRatings = user1.merge(user2, on="item id", suffixes=(' u1', ' u2'))
@@ -36,13 +68,33 @@ def getRatings(userId, itemId, data):
     ratingRow = data[ratingRowFilter]
     return ratingRow["rating"].values
 
-def predictRating(userId, itemId, data, k=5):
-    userNeighbors = getUserNeighbors(userId, k, data)
+def getUserNeighbors(userId, k):
+    global baseData
+    global correlationMatrix
+
+    userList = np.unique(baseData["user id"])
+    userList = np.delete(userList, np.where(userList==userId))
+
+    # associate other users with their similarity to the given user
+    userList = np.array([[otherUserId, pearsonCorrelation(userId, otherUserId)] for otherUserId in userList])
+
+    # remove users with non existing similarity (i.e. when similarity is np.NaN)
+    userList = userList[~np.isnan(userList).any(axis=1)]
+
+    # sort by similarity and return the first k values
+    sortedIndexes = userList[:,1].argsort()[::-1]
+
+    return userList[sortedIndexes][:k]
+
+def predictRating(userId, itemId, k=5):
+    global baseData
+
+    userNeighbors = getUserNeighbors(userId, k)
 
     prediction = 0
     similaritySum = 0
-    for neighbor in userNeighbors:
-        neighborRatings, neighborSimilarity = getRatings(neighbor, itemId, data)
+    for neighbor, neighborSimilarity in userNeighbors:
+        neighborRatings = getRatings(neighbor, itemId, baseData)
         prediction += neighborRatings.sum()
         similaritySum += abs(neighborSimilarity) * len(neighborRatings)
 
@@ -50,22 +102,37 @@ def predictRating(userId, itemId, data, k=5):
         return prediction / similaritySum
     return np.NaN
 
+def RMSEerror(rowIndex, ratingRow):
+    global errorList
+
+    rowError = predictRating(ratingRow["user id"], ratingRow["item id"])
+    rowError = (rowError - ratingRow["rating"]) ** 2
+
+    errorList[rowIndex] = rowError
+
+    if rowIndex % 100 == 0:
+        print("rowError completion : {:.2f}%".format(np.count_nonzero(errorList)/len(errorList)))
+
 def RMSE(baseData, testData):
-    error = 0
+    global errorList
+    global correlationMatrix
 
-    # for each test row : error += (predict(u, i) - r)**2
+    errorList = np.zeros(len(testData))
+    userList = np.unique(baseData["user id"])
+    correlationMatrix = np.zeros((userList.max()+1, userList.max()+1))
+
     for i, row in testData.iterrows():
-        rowError = (predictRating(row["user id"], row["item id"], baseData) - row["rating"])**2
-        # error += np.nan_to_num(rowError)
-        error += rowError
+        RMSEerror(i, row)
 
-    error = np.sqrt( error/len(testData) )
+    error = np.sqrt( errorList.sum() / len(testData) )
 
     return error
 
 def main():
-    for dataIndex in range(6):
-        print("--- Computing data {} error ---".format(dataIndex))
+    global baseData
+
+    for dataIndex in range(1, 6):
+        print("--- Testing algorithm on data {} ---".format(dataIndex))
 
         baseData, testData = importData(dataIndex)
         error = RMSE(baseData, testData)
